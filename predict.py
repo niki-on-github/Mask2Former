@@ -1,10 +1,11 @@
 import sys
 sys.path.insert(0, "Mask2Former")
+import os
 import tempfile
-from pathlib import Path
+import pathlib as pathlib
 import numpy as np
 import cv2
-import cog
+from cog import BasePredictor, Input, Path
 
 # import some common detectron2 utilities
 from detectron2.config import CfgNode as CN
@@ -18,13 +19,16 @@ from detectron2.projects.deeplab import add_deeplab_config
 from mask2former import add_maskformer2_config
 
 
-class Predictor(cog.Predictor):
+class Predictor(BasePredictor):
     def setup(self):
+        weight_file = 'model_final_f07440.pkl'
         cfg = get_cfg()
         add_deeplab_config(cfg)
         add_maskformer2_config(cfg)
         cfg.merge_from_file("Mask2Former/configs/coco/panoptic-segmentation/swin/maskformer2_swin_large_IN21k_384_bs16_100ep.yaml")
-        cfg.MODEL.WEIGHTS = 'model_final_f07440.pkl'
+        if not os.path.exists(weight_file):
+            os.system("wget -c https://dl.fbaipublicfiles.com/maskformer/mask2former/coco/panoptic/maskformer2_swin_large_IN21k_384_bs16_100ep/model_final_f07440.pkl")
+        cfg.MODEL.WEIGHTS = weight_file
         cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON = True
         cfg.MODEL.MASK_FORMER.TEST.INSTANCE_ON = True
         cfg.MODEL.MASK_FORMER.TEST.PANOPTIC_ON = True
@@ -32,13 +36,7 @@ class Predictor(cog.Predictor):
         self.coco_metadata = MetadataCatalog.get("coco_2017_val_panoptic")
 
 
-    @cog.input(
-        "image",
-        type=Path,
-        help="Input image for segmentation. Output will be the concatenation of Panoptic segmentation (top), "
-             "instance segmentation (middle), and semantic segmentation (bottom).",
-    )
-    def predict(self, image):
+    def predict(self, image: Path = Input(description="Input image for segmentation")) -> Path:
         im = cv2.imread(str(image))
         outputs = self.predictor(im)
         v = Visualizer(im[:, :, ::-1], self.coco_metadata, scale=1.2, instance_mode=ColorMode.IMAGE_BW)
@@ -49,6 +47,6 @@ class Predictor(cog.Predictor):
         v = Visualizer(im[:, :, ::-1], self.coco_metadata, scale=1.2, instance_mode=ColorMode.IMAGE_BW)
         semantic_result = v.draw_sem_seg(outputs["sem_seg"].argmax(0).to("cpu")).get_image()
         result = np.concatenate((panoptic_result, instance_result, semantic_result), axis=0)[:, :, ::-1]
-        out_path = Path(tempfile.mkdtemp()) / "out.png"
+        out_path = pathlib.Path(tempfile.mkdtemp()) / "out.png"
         cv2.imwrite(str(out_path), result)
-        return out_path
+        return Path(out_path)
